@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/frigidom1024/go-jwt-middleware/core"
+	core "github.com/frigidom1024/go-jwt-middleware/core"
 )
 
 // 辅助函数
@@ -377,6 +377,194 @@ func TestGetTokenExtractor(t *testing.T) {
 		t.Error("GetTokenExtractor returned nil")
 	} else {
 		t.Logf("Default extractor name: %s", extractor.Name())
+	}
+}
+
+// TestOptionalAuthenticate 测试可选认证中间件
+func TestOptionalAuthenticate(t *testing.T) {
+	middleware := core.NewAuthMiddleware[TestUserData]("secret", time.Hour)
+
+	userData := TestUserData{
+		UserID:   "123",
+		Username: "testuser",
+	}
+	expiresAt := time.Now().Add(24 * time.Hour)
+	token, _ := middleware.GenerateToken(userData, expiresAt)
+
+	t.Logf("Test token generated: %s", token)
+
+	tests := []struct {
+		name           string
+		token          string
+		expectedStatus int
+		shouldHaveData bool
+	}{
+		{
+			name:           "valid token",
+			token:          token,
+			expectedStatus: http.StatusOK,
+			shouldHaveData: true,
+		},
+		{
+			name:           "no token",
+			token:          "",
+			expectedStatus: http.StatusOK, // OptionalAuthenticate 应该放行
+			shouldHaveData: false,
+		},
+		{
+			name:           "invalid token",
+			token:          "invalid.token",
+			expectedStatus: http.StatusOK, // OptionalAuthenticate 应该放行
+			shouldHaveData: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Logf("Running test case: %s", tt.name)
+			if tt.token != "" {
+				t.Logf("Using token: %s", tt.token)
+			} else {
+				t.Log("No token provided")
+			}
+
+			// 创建测试处理器
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// 检查 context 中是否有用户数据
+				data, ok := middleware.GetDataFromContext(r.Context())
+				t.Logf("Handler: GetDataFromContext returned ok=%v, data=%+v", ok, data)
+
+				if tt.shouldHaveData {
+					if !ok {
+						t.Error("expected data in context, got none")
+					} else if data.UserID != "123" {
+						t.Errorf("expected UserID 123, got %q", data.UserID)
+					} else {
+						t.Logf("Successfully retrieved user data from context: UserID=%q, Username=%q",
+							data.UserID, data.Username)
+					}
+				} else {
+					if ok {
+						t.Errorf("expected no data in context, but got: %+v", data)
+					} else {
+						t.Log("Correctly no data in context")
+					}
+				}
+				w.WriteHeader(http.StatusOK)
+			})
+
+			// 包装中间件
+			wrapped := middleware.OptionalAuthenticate(handler)
+
+			// 创建请求
+			req := httptest.NewRequest("GET", "/test", nil)
+			if tt.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tt.token)
+				t.Logf("Request header: Authorization: Bearer %s", tt.token[:min(len(tt.token), 20)]+"...")
+			}
+
+			// 创建响应记录器
+			rec := httptest.NewRecorder()
+
+			// 执行请求
+			wrapped.ServeHTTP(rec, req)
+
+			t.Logf("Response status: %d, Body: %s", rec.Code, rec.Body.String())
+
+			// 检查状态码
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rec.Code)
+			}
+		})
+	}
+}
+
+// TestOptionalAuthenticateWithValidToken 测试可选认证中间件有有效token的情况
+func TestOptionalAuthenticateWithValidToken(t *testing.T) {
+	middleware := core.NewAuthMiddleware[TestUserData]("secret", time.Hour)
+
+	userData := TestUserData{
+		UserID:   "123",
+		Username: "testuser",
+		Roles:    []string{"admin", "user"},
+	}
+	expiresAt := time.Now().Add(24 * time.Hour)
+	token, _ := middleware.GenerateToken(userData, expiresAt)
+
+	t.Logf("Generated token: %s", token)
+
+	// 创建测试处理器
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 检查 context 中是否有用户数据
+		data, ok := middleware.GetDataFromContext(r.Context())
+
+		if !ok {
+			t.Error("expected data in context, got none")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		if data.UserID != userData.UserID {
+			t.Errorf("expected UserID %q, got %q", userData.UserID, data.UserID)
+		}
+		if data.Username != userData.Username {
+			t.Errorf("expected Username %q, got %q", userData.Username, data.Username)
+		}
+		if len(data.Roles) != len(userData.Roles) {
+			t.Errorf("expected %d roles, got %d", len(userData.Roles), len(data.Roles))
+		}
+
+		t.Logf("Successfully retrieved user data: UserID=%q, Username=%q, Roles=%v",
+			data.UserID, data.Username, data.Roles)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// 包装可选认证中间件
+	wrapped := middleware.OptionalAuthenticate(handler)
+
+	// 创建请求（带有效 token）
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	t.Logf("Response status: %d", rec.Code)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+}
+
+// TestOptionalAuthenticateWithoutToken 测试可选认证中间件没有token的情况
+func TestOptionalAuthenticateWithoutToken(t *testing.T) {
+	middleware := core.NewAuthMiddleware[TestUserData]("secret", time.Hour)
+
+	// 创建测试处理器
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 检查 context 中是否有用户数据（应该没有）
+		data, ok := middleware.GetDataFromContext(r.Context())
+
+		if ok {
+			t.Errorf("expected no data in context, but got: %+v", data)
+		}
+
+		t.Log("Correctly no data in context, request passed through")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// 包装可选认证中间件
+	wrapped := middleware.OptionalAuthenticate(handler)
+
+	// 创建请求（不带 token）
+	req := httptest.NewRequest("GET", "/test", nil)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	t.Logf("Response status: %d", rec.Code)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 }
 

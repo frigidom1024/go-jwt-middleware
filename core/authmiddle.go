@@ -16,6 +16,7 @@ const (
 
 type AuthMiddleware[T any] interface {
 	Authenticate(next http.Handler) http.Handler
+	OptionalAuthenticate(next http.Handler) http.Handler
 	GenerateToken(data T, expiresAt time.Time) (string, error)
 	GenerateTokenWithDuration(data T, duration time.Duration) (string, error)
 	GetDataFromContext(ctx context.Context) (T, bool)
@@ -67,6 +68,36 @@ func (m *MiddlewareImpl[T]) Authenticate(next http.Handler) http.Handler {
 		}
 		// 检查context中是否已存在claims，避免覆盖
 		ctx := r.Context()
+		if existing := ctx.Value(DEFAULT_CTX_KEY); existing != nil {
+			log.Printf("[WARNING] Context key %q already exists with value %v, overwriting with new claimsdata", DEFAULT_CTX_KEY, existing)
+		}
+		r = r.WithContext(context.WithValue(ctx, DEFAULT_CTX_KEY, claims.Data))
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (m *MiddlewareImpl[T]) OptionalAuthenticate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		// 尝试提取 token
+		token, err := m.tokenExtractor.Extract(r)
+		if err != nil {
+			// 没有 token 或提取失败，直接放行
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// 尝试解析 token
+		claims, err := m.ParseToken(token)
+		if err != nil {
+			// token 无效，直接放行
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// token 有效，将数据放入 context
 		if existing := ctx.Value(DEFAULT_CTX_KEY); existing != nil {
 			log.Printf("[WARNING] Context key %q already exists with value %v, overwriting with new claimsdata", DEFAULT_CTX_KEY, existing)
 		}

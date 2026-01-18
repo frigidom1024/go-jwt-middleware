@@ -43,9 +43,15 @@ auth := core.NewAuthMiddleware[User]("your-secret-key", 24*time.Hour)
 // 必须认证 - 未认证返回 401
 mux.Handle("/api/protected", auth.Authenticate(myHandler))
 
-// 可选认证 - 未认证请求也会通过
+// 可选认证 - 未认证请求也会通过，适合个性化内容场景
 mux.Handle("/api/public", auth.OptionalAuthenticate(myHandler))
 ```
+
+**可选认证场景**：
+- 公开API但希望为认证用户提供个性化内容
+- 信息流、推荐列表等场景
+- A/B测试或功能灰度发布
+- 用户行为追踪（区分已登录和游客用户）
 
 ### 4. 生成 Token
 

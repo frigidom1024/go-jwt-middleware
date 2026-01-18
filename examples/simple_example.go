@@ -75,11 +75,26 @@ func main() {
 		}
 	})))
 
+	// 公开但可选认证路由 - 使用 OptionalAuthenticate 中间件
+	// 如果用户提供了 token，可以获取个性化内容；如果没有，仍然可以访问
+	mux.Handle("/public", auth.OptionalAuthenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 尝试从 context 中获取用户数据
+		data, ok := auth.GetDataFromContext(r.Context())
+		if ok {
+			// 已认证用户：显示个性化内容
+			fmt.Fprintf(w, "Welcome back, %s! (Role: %s)\n", data.Username, data.Role)
+		} else {
+			// 未认证用户：显示默认内容
+			w.Write([]byte("Welcome, guest! Please login for personalized content.\n"))
+		}
+	})))
+
 	// 步骤 6: 启动服务器
 	fmt.Println("Server starting on :8080...")
 	fmt.Println("Try:")
 	fmt.Println("  GET /login       - Get a token")
 	fmt.Println("  GET /protected   - Access protected route (requires token)")
+	fmt.Println("  GET /public      - Access public route (token optional, shows personalized content if authenticated)")
 	http.ListenAndServe(":8080", mux)
 }
 

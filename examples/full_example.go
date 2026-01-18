@@ -53,6 +53,10 @@ func main() {
 	mux.Handle("/profile", auth.Authenticate(http.HandlerFunc(profileHandler)))
 	mux.Handle("/dashboard", auth.Authenticate(http.HandlerFunc(dashboardHandler)))
 
+	// 公开但可选认证路由 - 使用 OptionalAuthenticate
+	mux.Handle("/feed", auth.OptionalAuthenticate(http.HandlerFunc(feedHandler)))
+	mux.Handle("/search", auth.OptionalAuthenticate(http.HandlerFunc(searchHandler)))
+
 	// 启动服务器
 	fmt.Println("Server starting on :8080...")
 	if err := http.ListenAndServe(":8080", mux); err != nil {
@@ -151,6 +155,71 @@ func dashboardHandler(w http.ResponseWriter, r *http.Request) {
 		"is_admin":   hasAdmin,
 		"roles":      user.Roles,
 		"issued_at":  time.Now().Format(time.RFC3339),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// feedHandler 处理信息流请求（可选认证）
+func feedHandler(w http.ResponseWriter, r *http.Request) {
+	// 尝试从 context 中获取用户数据
+	user, ok := auth.GetDataFromContext(r.Context())
+
+	response := map[string]interface{}{
+		"items": []map[string]string{
+			{"id": "1", "title": "Post 1", "content": "This is the first post"},
+			{"id": "2", "title": "Post 2", "content": "This is the second post"},
+			{"id": "3", "title": "Post 3", "content": "This is the third post"},
+		},
+		"timestamp": time.Now().Format(time.RFC3339),
+	}
+
+	if ok {
+		// 已认证用户 - 显示个性化内容
+		response["message"] = fmt.Sprintf("Welcome back, %s!", user.Username)
+		response["user"] = user.Username
+		response["personalized"] = true
+	} else {
+		// 未认证用户 - 显示通用内容
+		response["message"] = "Welcome, guest!"
+		response["personalized"] = false
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// searchHandler 处理搜索请求（可选认证）
+func searchHandler(w http.ResponseWriter, r *http.Request) {
+	// 获取查询参数
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		http.Error(w, "Query parameter 'q' is required", http.StatusBadRequest)
+		return
+	}
+
+	// 尝试从 context 中获取用户数据
+	user, ok := auth.GetDataFromContext(r.Context())
+
+	response := map[string]interface{}{
+		"query": query,
+		"results": []map[string]string{
+			{"id": "1", "title": "Result 1 for " + query},
+			{"id": "2", "title": "Result 2 for " + query},
+			{"id": "3", "title": "Result 3 for " + query},
+		},
+		"timestamp": time.Now().Format(time.RFC3339),
+	}
+
+	if ok {
+		// 已认证用户 - 保存搜索历史
+		response["message"] = fmt.Sprintf("Search results for '%s' (saved to history)", query)
+		response["user"] = user.Username
+	} else {
+		// 未认证用户 - 不保存历史
+		response["message"] = fmt.Sprintf("Search results for '%s'", query)
+		response["hint"] = "Login to save your search history"
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -275,7 +344,7 @@ func min(a, b int) int {
 func printUsage() {
 	fmt.Println("Usage Examples:")
 	fmt.Println("\n1. Start the server:")
-	fmt.Println("   go run examples/main.go")
+	fmt.Println("   go run examples/full_example.go")
 	fmt.Println("\n2. Login to get token:")
 	fmt.Println("   curl -X POST http://localhost:8080/login \\")
 	fmt.Println("     -H 'Content-Type: application/json' \\")
@@ -286,6 +355,15 @@ func printUsage() {
 	fmt.Println("\n4. Access dashboard:")
 	fmt.Println("   curl http://localhost:8080/dashboard \\")
 	fmt.Println("     -H 'Authorization: YOUR_TOKEN'")
-	fmt.Println("\n5. Test without token (should fail):")
+	fmt.Println("\n5. Test optional authentication routes (works with or without token):")
+	fmt.Println("   # With token (personalized):")
+	fmt.Println("   curl http://localhost:8080/feed -H 'Authorization: Bearer YOUR_TOKEN'")
+	fmt.Println("   # Without token (guest):")
+	fmt.Println("   curl http://localhost:8080/feed")
+	fmt.Println("\n   # Search with token (history saved):")
+	fmt.Println("   curl 'http://localhost:8080/search?q=golang' -H 'Authorization: Bearer YOUR_TOKEN'")
+	fmt.Println("   # Search without token (no history):")
+	fmt.Println("   curl 'http://localhost:8080/search?q=golang'")
+	fmt.Println("\n6. Test without token (should fail on protected routes):")
 	fmt.Println("   curl http://localhost:8080/profile")
 }
