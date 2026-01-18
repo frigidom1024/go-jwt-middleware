@@ -29,4 +29,4 @@ vendor/
 Thumbs.db
 
 # Claude Code settings
-.claude/settings.local.json
+.claude/
